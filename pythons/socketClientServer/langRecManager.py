@@ -42,16 +42,7 @@ class LangRecManager(commServer):
     #         self.outputs.append(sk_out)
 
 
-    def removeFromOutputList(self, sk):
-        if sk in self.outputs:
-            self.outputs.remove(sk)
-
-        for i in range(commConfigs["MangerServeListCnt"]):
-            if sk in self.outputListList[i]:
-                self.outputListList[i].remove(sk)
-
     def appendToOutputList(self, sk):
-
         if sk not in self.outputs:
             self.outputs.append(sk)
             minIndex = 0
@@ -65,10 +56,35 @@ class LangRecManager(commServer):
         else:
             return
 
+    def removeFromOutputList(self, sk):
+        if sk in self.outputs:
+            self.outputs.remove(sk)
+
+        for i in range(commConfigs["MangerServeListCnt"]):
+            if sk in self.outputListList[i]:
+                self.outputListList[i].remove(sk)
+
     def appendToInputList(self, sk):
-        pass
+        if sk not in self.inputs:
+            self.inputs.append(sk)
+            minIndex = 0
+            tempMin = 65535
+            for i in range(commConfigs["MangerServeListCnt"]):
+                cnt = len(self.inputListList[i])
+                if tempMin > cnt:
+                    tempMin = cnt
+                    minIndex = i
+            self.inputListList[minIndex].append(sk)  # 客户端添加到inputs
+        else:
+            return
+
     def removeFromInputList(self, sk):
-        pass
+        if sk in self.inputs:
+            self.inputs.remove(sk)
+
+        for i in range(commConfigs["MangerServeListCnt"]):
+            if sk in self.inputListList[i]:
+                self.inputListList[i].remove(sk)
 
     def sendMsg(self, msg):
         sk_out = msg.getTargetSK()
@@ -78,17 +94,21 @@ class LangRecManager(commServer):
 
 
     def cleanDelConn(self, s):
+        print(self.client_info.keys())
         clientID = self.client_info[s]
         print("DisConnet the {}".format(clientID))
         # print("clean inputs:{}, outputs{}".format(self.inputs, self.outputs))
         
-        if s in self.inputs:
-            # print("remove frome inputs")
-            self.inputs.remove(s)
+        # if s in self.inputs:
+        #     # print("remove frome inputs")
+        #     self.inputs.remove(s)
+        #
+        # if s in self.outputs:
+        #     # print("remove frome outputs")
+        #     self.outputs.remove(s)
 
-        if s in self.outputs:
-            # print("remove frome outputs")
-            self.outputs.remove(s)
+        self.removeFromInputList(s)
+        self.removeFromOutputList(s)
                             
         if s in self.message_queues:
             # print("del message_queues")
@@ -124,16 +144,9 @@ class LangRecManager(commServer):
                 if s is self.server:#是客户端连接
                     connection, client_address = s.accept()
                     print("%s connect." % str(client_address))
-                    connection.setblocking(0) #非阻塞
-                    minIndex = 0
-                    tempMin = 65535
-                    for i in range(commConfigs["MangerServeListCnt"]):
-                        cnt = len(self.inputListList[i])
-                        if tempMin > cnt:
-                            tempMin = cnt
-                            minIndex = i
+                    connection.setblocking(1) #非阻塞
+                    self.appendToInputList(connection)
 
-                    self.inputListList[minIndex].append(connection) #客户端添加到inputs
             # for s in exceptional:
             #     logging.error("Client:%s Close Error." % str(self.client_info[s]))
             #     self.cleanDelConn(s)
@@ -151,17 +164,24 @@ class LangRecManager(commServer):
             # Data In!!
             for s in readable:
                 try:
+                    # print(s)
                     data_bytes = s.recv(1024)
                     print(data_bytes)
-                except:
-                    err_msg = "Client Error!"
+                except Exception as e:
+                    err_msg = "Client Error! {}".format(e)
+                    # print(s)
                     logging.error(err_msg)
-
-                if data_bytes:
-                    self.processMsg(data_bytes, s)
-                else:
-                    print("Client:%s Close." % str(self.client_info[s]))
                     self.cleanDelConn(s)
+                else:
+                    if data_bytes:
+                        self.processMsg(data_bytes, s)
+                    else:
+                        print("Client:%s Close." % str(self.client_info[s]))
+                        print(threading.currentThread().getName())
+                        self.cleanDelConn(s)
+                        print("-------------------------------")
+
+
             for s in exceptional:
                 logging.error("Client:%s Close Error." % str(self.client_info[s]))
                 self.cleanDelConn(s)
@@ -180,13 +200,11 @@ class LangRecManager(commServer):
                     data_bytes = self.message_queues[s].get_nowait()  # 非阻塞获取
                 except queue.Empty:
                     err_msg = "Output Queue is Empty!"
-                    self.outputListList[sendSelectListIndex].remove(s)
-
+                    self.removeFromOutputList(s)
                 except Exception as e:
                     err_msg = "Send Data Error! ErrMsg:%s" % str(e)
                     logging.error(err_msg)
-                    if s in self.outputListList[sendSelectListIndex]:
-                        self.outputListList[sendSelectListIndex].remove(s)
+                    self.removeFromOutputList(s)
                 else:
                     tarSk = s
                     try:
@@ -215,15 +233,17 @@ class LangRecManager(commServer):
                             threading.Thread(target=self.threadRecv,
                                              args=(i,),
                                              name=self.modelID + "recvT_{}".format(i))
+                        print(self.recvThreadList[i].getName())
                         self.recvThreadList[i].start()
                 # all the send Thread must StartAllTime;
                 # cause outputList could be change empty all the time,
                 # so don't start/stop the thread all the time.
                 if self.sendThreadList[i] == None:
                     self.sendThreadList[i] = \
-                        threading.Thread(target=self.threadRecv,
+                        threading.Thread(target=self.threadSend,
                                              args=(i,),
-                                             name=self.modelID + "recvT_{}".format(i))
+                                             name=self.modelID + "sendT_{}".format(i))
+                    print(self.sendThreadList[i].getName())
                     self.sendThreadList[i].start()
             time.sleep(1)
 
@@ -302,6 +322,7 @@ class LangRecManager(commServer):
                     self.message_queues[sk_in] = queue.Queue()
                     self.client_info[sk_in] = clientID
                     self.cleanDelConn(sk_in)
+                    print("WRONG Client name {}, not in ManageList!".format(clientID))
                     return None
 
                 if clientID not in self.modelConnectStatus:
@@ -309,11 +330,22 @@ class LangRecManager(commServer):
                     self.modelSockets[clientID] = sk_in
                     self.message_queues[sk_in] = queue.Queue()
                     self.client_info[sk_in] = clientID
+                    print("Get the client Info {}, ".format(clientID)+threading.currentThread().getName())
 
-                tarID = self.modelID
-                sendMsg = Msg(isDiscons=False, tarID=tarID, cmd="CONF")
-                sendMsg.setTargetSK(sk_in)
-                self.sendMsg(sendMsg)
+                    tarID = self.modelID
+                    sendMsg = Msg(isDiscons=False, tarID=tarID, cmd="CONF")
+                    sendMsg.setTargetSK(sk_in)
+                    self.sendMsg(sendMsg)
+                else:
+                    clientID = clientID + "_SAME"
+                    # This has a same exit model
+                    self.modelConnectStatus[clientID] = True
+                    self.modelSockets[clientID] = sk_in
+                    self.message_queues[sk_in] = queue.Queue()
+                    self.client_info[sk_in] = clientID
+                    self.cleanDelConn(sk_in)
+                    print("Have Manager a same model {}, ".format(clientID) + threading.currentThread().getName())
+
 
         for model in self.modelList:
             if msgModelID == model:
@@ -324,5 +356,5 @@ class LangRecManager(commServer):
                     return None
 
 if "__main__" == __name__:
-    LangRecManager().run()
+    LangRecManager().threadMoniter()
 

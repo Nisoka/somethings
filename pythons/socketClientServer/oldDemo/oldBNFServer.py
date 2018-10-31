@@ -1,4 +1,8 @@
-#!/bin/env python
+#!/usr/local/bin/python
+
+"""
+client.py
+"""
 import sys
 import time
 import socket
@@ -7,63 +11,14 @@ import logging
 import queue
 import threading
 
+from communicate import Client, commConfigs
 from LRModelMsg import Msg
 
-commConfigs={
-    "timeOut":0.1,
-    "MangerServeListCnt":3,
-}
+sys.path.append("/home/nan/git-nan/code/pytools/BUT-Speech/BottleneckFeatureExtractor")
+from PipeAudio2BNF import extractBNF
 
-class commServer(object):
-    def __init__(self, host='127.0.0.1', port=77777, timeout=1, client_nums=10):
-        self.__host = host
-        self.__port = port
-        self.__timeout = timeout
-        self.__client_nums = client_nums
-        self.__buffer_size = 4096
 
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # no matter what the operate, recv send accept ...
-        # blocking=false socket, will return rightnow, so will recv/send multi times to
-        # complete a true recv/send
-        # blocking=true socket, will wait for the recv/send data(unless the Tcp's half package, ),
-        # self.server.setblocking(False)
-        self.server.setblocking(True)
-
-        self.server.settimeout(self.__timeout)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) #keepalive
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #端口复用
-        server_host = (self.__host, self.__port)
-        try:
-            self.server.bind(server_host)
-            self.server.listen(self.__client_nums)
-        except:
-            raise
-
-        self.serverList = [self.server]
-        # the self.inputs self.outputs is for single thread;
-        # use multiThread use self.inputListList and self.outputListList instead
-        self.inputs = [self.server]
-        self.outputs = []
-
-        # self.inputListList
-        # [inputList1, inputList2, inputList3]
-        self.inputListList = [] # Multi thread, every thread is a inputs!!
-        for i in range(commConfigs["MangerServeListCnt"]):
-            self.inputListList.append([])
-        self.outputListList = [] #输出文件描述符列表
-        for i in range(commConfigs["MangerServeListCnt"]):
-            self.outputListList.append([])
-
-        self.message_queues = {}#消息队列
-        self.client_info = {}
-
-    def cleanDelConn(self, s):
-        pass
-        
-    def run(self):
-        pass
-
+from langRecConfig import LRConfig
 
 class Client(object):
     def __init__(self, host, port=37777, timeout=1, reconnect=2):
@@ -72,25 +27,20 @@ class Client(object):
         self.__timeout = timeout
         self.__buffer_size = 1024
         self.__flag = 1
-        self.__lock = threading.Lock()
-
         self.client = None
-
+        self.__lock = threading.Lock()
         self.threadSend = None
         self.threadRecv = None
         self.threadSendFlag = False
         self.threadRecvFlag = False
-        self.threadMoniterFlag = False
         self.threadMutex = threading.Lock()
+        self.modelID = "BNFServer:"
 
-        self.inputs = []  # select 接收文件描述符列表
-        self.outputs = []  # 输出文件描述符列表
-        self.message_queues = {}  # 消息队列
+        self.inputs = [] #select 接收文件描述符列表
+        self.outputs = [] #输出文件描述符列表
+        self.message_queues = {}#消息队列
         self.client_info = {}
-
-        self.useThreadProcessMsg = False
-        self.modelID = ""
-        self.Manager = ""
+        self.stopMoniter = False
 
     @property
     def flag(self):
@@ -102,10 +52,10 @@ class Client(object):
 
     def __connect(self):
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # client.bind(('0.0.0.0', 12345,))
+        #client.bind(('0.0.0.0', 12345,))
         self.client.setblocking(True)
         self.client.settimeout(self.__timeout)
-        self.client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # 端口复用
+        self.client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #端口复用
         server_host = (self.__host, self.__port)
         try:
             self.client.connect(server_host)
@@ -116,6 +66,8 @@ class Client(object):
         self.outputs = []
 
     def sendMsg(self, msg):
+        # tarModelID = msg.getTargetSK()
+        # sk_out = self.modelSockets(tarModelID)
         sk_out = self.client
         self.message_queues[sk_out].put(msg.getDataBytes())
         if sk_out not in self.outputs:
@@ -139,14 +91,17 @@ class Client(object):
                 return
             _, writable, exceptional = select.select([], self.outputs, self.outputs, 1)
 
-            if not (writable or exceptional):
+            if not (writable or exceptional) :
                 continue
 
             for s in writable:
                 try:
+                    # print("send:")
+                    # print(s)
                     data_bytes = self.message_queues[s].get_nowait()  # 非阻塞获取
                 except queue.Empty:
                     err_msg = "Output Queue is Empty!"
+                    # logging.log(err_msg)
                     self.outputs.remove(s)
                 except Exception as e:
                     err_msg = "Send Data Error! ErrMsg:%s" % str(e)
@@ -156,6 +111,7 @@ class Client(object):
                 else:
                     tarSk = s
                     try:
+                        # print(data_bytes)
                         tarSk.sendall(data_bytes)
                     except Exception as e:
                         print("connect close! sendFail")
@@ -173,12 +129,14 @@ class Client(object):
                 self.threadRecv = None
                 return
 
-            readable, _, exceptional = select.select(self.inputs, [], self.inputs, 1)
-            if not (readable or exceptional):
+            readable , _ , exceptional = select.select(self.inputs, [], self.inputs, 1)
+            if not (readable or exceptional) :
                 continue
-            for s in readable:
+            for s in readable :
                 if s != self.client:
                     print("Debug the fd=-1")
+                    print(s)
+                    print(self.client)
                     self.cleanDelConn(self.client)
                     self.threadRecv = None
                     continue
@@ -192,11 +150,7 @@ class Client(object):
                     logging.error(err_msg)
                 else:
                     if data_bytes:
-                        if self.useThreadProcessMsg == False:
-                            self.processMsg(data_bytes, s)
-                        else:
-                            print("-------- wait use a thread to processMsg -----")
-                            pass
+                        self.processMsg(data_bytes, s)
                         print("recv Data is %s\n" % data_bytes)
                     else:
                         print("Server close connect!")
@@ -208,9 +162,39 @@ class Client(object):
                 self.cleanDelConn(self.client)
                 self.threadRecv = None
 
+    # You should define your processMsg(can use thread)
+    def processMsg(self, data_bytes, sk_in=None):
+        msg = Msg(data_bytes=data_bytes)
+        msgModelID = msg.getTarModelID()
+        if msgModelID == self.modelID:
+            msgCmd = msg.getCmd()
+            msgMsg = msg.getMsg()
+            if msgCmd == "CONFIG":
+                if msgMsg == "repeat":
+                    self.stopMoniter = True
+            elif msgCmd == "Extract":
+                [wavfile, wavName] = msgMsg.split("=>")
+                wavfile = wavfile.strip()
+                wavName = wavName.strip()
+                fea_output = bnfOutDir + "/" + wavName + ".bnf"
+                state = extractBNF(wavfile, fea_output)
+                if state == True:
+                    tarID = "LRManager:"
+                    srcID = self.modelID
+                    cmd = "TESTING"
+                    msg = fea_output
+                    # msg = data
+                    sendMsg = Msg(isDiscons=False, tarID=tarID, srcID=srcID, cmd=cmd, msg=msg)
+                    self.sendMsg(sendMsg)
+
+
+        else:
+            logging.error("{} Recv wrong socket package {}!".format(self.modelID, msgModelID))
+        pass
+
     # You should define your enrollmentServer
     def enrollmentServer(self):
-        tarID = self.Manager
+        tarID = "LRManager:"
         srcID = self.modelID
         cmd = "CONFIG"
         msg = "enrollment"
@@ -219,32 +203,33 @@ class Client(object):
         self.sendMsg(sendMsg)
 
     def threadMoniter(self):
-        self.threadMoniterFlag = True
         while True:
-            if self.threadMoniterFlag == False:
+            if self.stopMoniter:
                 self.cleanDelConn(self.client)
                 self.threadRecvFlag = False
                 self.threadSendFlag = False
                 time.sleep(1)
                 exit(0)
 
-            if not (self.client and self.threadSend and self.threadRecv):
+            if not (self.client and self.threadSend and self.threadRecv ):
                 while (self.threadRecv or self.threadSend):
                     if self.threadRecv is not None:
-                        print("{} Moniter: Recv not stop".format(self.modelID))
+                        print("Moniter: Recv not stop")
                     if self.threadSend is not None:
-                        print("{} Moniter: Send not stop".format(self.modelID))
+                        print("Moniter: Send not stop")
                     time.sleep(0.5)
+
 
                 self.__connect()
                 time.sleep(0.5)
                 self.threadRecvFlag = True
                 self.threadSendFlag = True
-                print("{} Connected! Start threads now!".format(self.modelID))
+                print("Manager Connected! Start threads now!")
+                # print(self.outputs)
                 self.threadSend = threading.Thread(target=self.sendThread,
-                                                   name=self.modelID + "sendT")
+                                             name=self.modelID + "sendT")
                 self.threadRecv = threading.Thread(target=self.recvThread,
-                                                   name=self.modelID + "recvT")
+                                             name=self.modelID + "recvT")
                 self.threadSend.start()
                 self.threadRecv.start()
                 time.sleep(1)
@@ -260,19 +245,15 @@ class Client(object):
                     if fd != sys.stdin:
                         continue
 
+                    # READ CMD FROME readLine
                     data = sys.stdin.readline().strip()
-                    tarID = self.Manager
-                    srcID = self.modelID
+                    tarID = "LRManager:"
                     msg = data
-                    sendMsg = Msg(isDiscons=False, tarID=tarID, srcID=srcID,
-                                  cmd="CMD:", msg=msg)
+                    sendMsg = Msg(isDiscons=False, tarID=tarID, srcID="BNFServer:", cmd="CMD:", msg=msg)
                     if self.client == None:
                         continue
                     self.sendMsg(sendMsg)
+                    # print(data)
 
                     if "exit" == data.lower():
-                        self.threadMoniterFlag = False
-
-    # You should define your processMsg(can use thread)
-    def processMsg(self, data_bytes, sk_in=None):
-        pass
+                        self.stopMoniter = True

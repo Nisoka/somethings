@@ -14,8 +14,8 @@ import select
 import logging
 import queue
 import threading
-from communicate import commServer, MsgS, Msg, commConfigs
-
+from communicate import commServer, commConfigs
+from LRModelMsg import Msg
 # BNF
 
 class LangRecManager(commServer):
@@ -26,10 +26,12 @@ class LangRecManager(commServer):
         self.modelSockets = {}
         self.modelConnectStatus = {}
         self.listenThread = None
+
         self.recvThreadList = []
         for i in range(commConfigs["MangerServeListCnt"]):
             self.recvThreadList.append(None)
         self.inputListListMutex = threading.Lock()
+
         self.sendThreadList = []
         for i in range(commConfigs["MangerServeListCnt"]):
             self.sendThreadList.append(None)
@@ -86,16 +88,19 @@ class LangRecManager(commServer):
             if sk in self.inputListList[i]:
                 self.inputListList[i].remove(sk)
 
-    def sendMsg(self, msg):
-        sk_out = msg.getTargetSK()
+    def sendMsg(self, msg, sk_out=None):
+        tarModelID = msg.getTarModelID()
+        if sk_out == None:
+            sk_out = self.modelSockets[tarModelID]
         self.message_queues[sk_out].put(msg.getDataBytes())
-        if sk_out not in self.outputs:
-            self.outputs.append(sk_out)
+        self.appendToOutputList(sk_out)
 
 
     def cleanDelConn(self, s):
-        print(self.client_info.keys())
-        clientID = self.client_info[s]
+        # print(self.client_info.keys())
+        clientID = "NoSuchModel"
+        if s in self.client_info:
+            clientID = self.client_info[s]
         print("DisConnet the {}".format(clientID))
         # print("clean inputs:{}, outputs{}".format(self.inputs, self.outputs))
         
@@ -169,7 +174,6 @@ class LangRecManager(commServer):
                     print(data_bytes)
                 except Exception as e:
                     err_msg = "Client Error! {}".format(e)
-                    # print(s)
                     logging.error(err_msg)
                     self.cleanDelConn(s)
                 else:
@@ -179,7 +183,6 @@ class LangRecManager(commServer):
                         print("Client:%s Close." % str(self.client_info[s]))
                         print(threading.currentThread().getName())
                         self.cleanDelConn(s)
-                        print("-------------------------------")
 
 
             for s in exceptional:
@@ -306,54 +309,65 @@ class LangRecManager(commServer):
 
     def processMsg(self, data_bytes, sk_in):
         msg = Msg(data_bytes=data_bytes)
-        msgModelID = msg.getModelID()
-        msgCmd = msg.getCmd()
+        msgTarModelID = msg.getTarModelID()
+        msgSrcModelID = msg.getSrcModelID()
+        msgCmd = msg.getCmd().strip()
         msgMsg = msg.getMsg()
         # confirm connected model.
         # modelID - LRManager:
         # cmd     - CONF
         # msg     - connectID(BNFServer:, IVECServer:, CLASServer:, DATAServer:)
-        if msgModelID == self.modelID:
-            if msgCmd == "CONF":
-                clientID = msgMsg
+        if msgTarModelID == self.modelID:
+            # print("in processMsg self model!")
+            if msgCmd == "CONFIG":
+                clientID = msgSrcModelID
                 if clientID not in self.modelList:
-                    self.modelConnectStatus[clientID] = True
-                    self.modelSockets[clientID] = sk_in
-                    self.message_queues[sk_in] = queue.Queue()
-                    self.client_info[sk_in] = clientID
-                    self.cleanDelConn(sk_in)
                     print("WRONG Client name {}, not in ManageList!".format(clientID))
+                    self.cleanDelConn(sk_in)
                     return None
 
                 if clientID not in self.modelConnectStatus:
+                    print("Get the client Info {}, ".format(clientID) + threading.currentThread().getName())
                     self.modelConnectStatus[clientID] = True
                     self.modelSockets[clientID] = sk_in
                     self.message_queues[sk_in] = queue.Queue()
                     self.client_info[sk_in] = clientID
-                    print("Get the client Info {}, ".format(clientID)+threading.currentThread().getName())
 
-                    tarID = self.modelID
-                    sendMsg = Msg(isDiscons=False, tarID=tarID, cmd="CONF")
-                    sendMsg.setTargetSK(sk_in)
+                    sendMsg = Msg(isDiscons=False, tarID=clientID,
+                                  srcID=self.modelID, cmd="Extract", msg="sox -t wav /home/nan/temp/wav/test-8k.wav -t wav - => test-8k")
                     self.sendMsg(sendMsg)
                 else:
-                    clientID = clientID + "_SAME"
-                    # This has a same exit model
-                    self.modelConnectStatus[clientID] = True
-                    self.modelSockets[clientID] = sk_in
+                    # There has a same model
+                    print("Have Manager a same Client {}, You just stop Now!".format(clientID) + threading.currentThread().getName())
+                    # don't save the client Info, just
                     self.message_queues[sk_in] = queue.Queue()
-                    self.client_info[sk_in] = clientID
-                    self.cleanDelConn(sk_in)
-                    print("Have Manager a same model {}, ".format(clientID) + threading.currentThread().getName())
+                    self.client_info[sk_in] = clientID+"-repeat"
+                    sendMsg = Msg(isDiscons=False, tarID=clientID,
+                                  srcID=self.modelID, cmd="CONFIG", msg="repeat")
+                    self.sendMsg(sendMsg, sk_in)
+            elif msgCmd == "TESTING" :
+                print(msg.getDataBytes())
+            elif msgCmd == "CMD:":
+                print(msg.getDataBytes())
+            else:
+                pass
+
+            return None
 
 
-        for model in self.modelList:
-            if msgModelID == model:
-                if self.modelConnectStatus[model] == True:
-                    target_sk = self.modelSockets[model]
-                else:
-                    target_sk = sk_in
-                    return None
+        if msgTarModelID in self.modelList:
+            if self.modelConnectStatus[msgTarModelID] == True:
+                target_sk = self.modelSockets[msgTarModelID]
+                sendMsg = Msg(isDiscons=False, tarID=msgTarModelID,
+                              srcID=msgSrcModelID, cmd=msgCmd, msg=msgMsg)
+                self.sendMsg(sendMsg, target_sk)
+            else:
+                sendMsg = Msg(isDiscons=False, tarID=msgSrcModelID,
+                              srcID=self.modelID, cmd="CONFIG", msg="NotReady")
+                self.sendMsg(sendMsg, sk_in)
+                return None
+        else:
+            print("{} msg To, No that Target:{}".format(msgSrcModelID, msgTarModelID))
 
 if "__main__" == __name__:
     LangRecManager().threadMoniter()

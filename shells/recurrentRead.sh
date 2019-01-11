@@ -16,6 +16,7 @@ function read_dir(){
 }
 
 function cp_dir(){
+    echo "$1 $2 $3"
     if [ ! -d $2 ]
     then
         mkdir -p $2
@@ -25,24 +26,16 @@ function cp_dir(){
     do
         if [ -d $1"/"$file ]
         then
-            cp_dir $1"/"$file $2"/"$file
+            cp_dir $1"/"$file $2"/"$file $3
         else
             ext=${file##*.}
-            if [ $ext == "o" ]
+
+            if [ $ext == $3 ]
             then
-                echo $1"/"$file
-            elif [ $ext == "cc" ]
-            then
-                echo $1"/"$file
-            elif [ $ext == "cpp" ]
-            then
-                 echo $1"/"$file
-                 
-            else
                 cp $1"/"$file $2"/"$file
             fi
         fi
     done
 }
 
-cp_dir $srcDir $targetDir
+cp_dir $srcDir $targetDir $3

@@ -5,8 +5,9 @@ from keras.layers import Dense, GlobalAveragePooling2D, Conv2D
 from keras.layers import Input, Conv1D, MaxPooling1D, Flatten
 from keras.layers.core import Reshape, Lambda
 from keras import backend as K
-import keras
 from keras.utils.vis_utils import plot_model
+
+from keras.optimizers import  Adam
 
 import ds_constant as c
 
@@ -87,6 +88,13 @@ def ConvertIdentityToEachVerify(identity_weight=None, verify_weight=None, model_
         eachVerfiyModel.save_weights(verify_weight)
 
     return eachVerfiyModel
+
+
+def compile_model(model):
+    optimizer = Adam(lr=c.lr_start, decay=1e-6)
+    model.compile(optimizer=optimizer,
+                            loss='mean_squared_error')
+    return model
 
 
 

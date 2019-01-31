@@ -2,6 +2,7 @@
 from keras import backend as K
 import numpy as np
 from keras.engine.topology import Layer
+from keras.layers import Conv2D
 from keras import regularizers
 import tensorflow as tf
 

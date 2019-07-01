@@ -60,3 +60,6 @@ for rowIndex in range(len(pdFrame.index)):
 pdFrame_concated = pd.concat([pdFrame, pdFrame2])
 print(pdFrame_concated)
 
+# 直接读取 dict 作为pdFrame
+pdFrame_concated.from_dict(dict, orient='index')
+
